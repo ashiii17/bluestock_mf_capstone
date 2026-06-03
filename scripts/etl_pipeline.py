@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 import sqlite3
+import argparse
+import importlib.util
 
 import pandas as pd
 
@@ -196,7 +198,7 @@ def write_sqlite_database(datasets: dict[str, pd.DataFrame]) -> None:
             df.to_sql(table_name(name), connection, if_exists="replace", index=False)
 
 
-def main() -> None:
+def run_day1() -> None:
     csv_paths = sorted(path for path in RAW_DIR.glob("*.csv") if path.name[:2].isdigit())
     if not csv_paths:
         raise FileNotFoundError(f"No provided CSV files found in {RAW_DIR}")
@@ -213,6 +215,35 @@ def main() -> None:
     print(f"\nWrote report: {REPORTS_DIR / 'day1_data_quality_summary.md'}")
     print(f"Wrote processed CSVs to: {PROCESSED_DIR}")
     print(f"Wrote SQLite database: {DB_PATH}")
+
+
+def _run_day2_module() -> None:
+    """Import and run scripts/day2_etl.py as a module and call its main()."""
+    module_path = Path(__file__).resolve().parents[1] / "scripts" / "day2_etl.py"
+    if not module_path.exists():
+        raise FileNotFoundError(f"Day 2 ETL script not found at {module_path}")
+    spec = importlib.util.spec_from_file_location("day2_etl", str(module_path))
+    if spec is None or spec.loader is None:
+        raise ImportError("Could not load day2_etl module")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    if hasattr(module, "main"):
+        module.main()
+    else:
+        raise AttributeError("day2_etl module has no main() function")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="ETL runner: day1 data checks and day2 warehouse build")
+    parser.add_argument("--mode", choices=("day1", "day2", "all"), default="all", help="Which part to run")
+    args = parser.parse_args()
+
+    if args.mode in ("day1", "all"):
+        print("Running Day 1 data checks and outputs...")
+        run_day1()
+    if args.mode in ("day2", "all"):
+        print("Running Day 2 cleaning, schema and DB load...")
+        _run_day2_module()
 
 
 if __name__ == "__main__":
