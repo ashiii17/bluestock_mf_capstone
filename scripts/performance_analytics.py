@@ -120,13 +120,15 @@ def build_scorecard(cagr_df, sharpe_df, alpha_df, perf_df, mdd_df):
     df = df.merge(alpha_df[['amfi_code', 'alpha', 'beta']], on='amfi_code', how='left')
     df = df.merge(perf_df[['amfi_code', 'expense_ratio_pct']], on='amfi_code', how='left')
     df = df.merge(mdd_df[['amfi_code', 'max_drawdown']], on='amfi_code', how='left')
-    # ranks as percentiles (higher better)
-    df['rank_3yr'] = df['cagr_3yr'].rank(pct=True, ascending=True)
-    df['rank_sharpe'] = df['sharpe'].rank(pct=True, ascending=True)
-    df['rank_alpha'] = df['alpha'].rank(pct=True, ascending=True)
-    df['rank_expense_inv'] = (1 - df['expense_ratio_pct'].rank(pct=True, ascending=True))
-    df['rank_mdd_inv'] = (1 - df['max_drawdown'].rank(pct=True, ascending=True))
-    df['score'] = 100 * (0.30 * df['rank_3yr'] + 0.25 * df['rank_sharpe'] + 0.20 * df['rank_alpha'] + 0.15 * df['rank_expense_inv'] + 0.10 * df['rank_mdd_inv'])
+    # ranks as percentiles (higher better where applicable)
+    df['rank_3yr'] = df['cagr_3yr'].rank(pct=True, ascending=False)
+    df['rank_sharpe'] = df['sharpe'].rank(pct=True, ascending=False)
+    df['rank_alpha'] = df['alpha'].rank(pct=True, ascending=False)
+    # expense: lower is better -> inverse percentile
+    df['rank_expense_inv'] = 1 - df['expense_ratio_pct'].rank(pct=True, ascending=True)
+    # max drawdown: less negative (higher) is better -> descending rank
+    df['rank_mdd'] = df['max_drawdown'].rank(pct=True, ascending=False)
+    df['score'] = 100 * (0.30 * df['rank_3yr'] + 0.25 * df['rank_sharpe'] + 0.20 * df['rank_alpha'] + 0.15 * df['rank_expense_inv'] + 0.10 * df['rank_mdd'])
     out = df[['amfi_code', 'cagr_1yr', 'cagr_3yr', 'cagr_5yr', 'sharpe', 'sortino', 'alpha', 'beta', 'max_drawdown', 'expense_ratio_pct', 'score']]
     out.to_csv(OUT / 'fund_scorecard.csv', index=False)
     return out
@@ -157,6 +159,40 @@ def benchmark_comparison(nav, scorecard, bench, years=3):
     plt.close()
 
 
+def summary_plots(nav_returns, shar_df, alpha_df):
+    # Daily returns histogram (all funds)
+    allr = nav_returns['daily_return'].dropna()
+    plt.figure(figsize=(8, 4))
+    plt.hist(allr, bins=200, density=True, color='C0')
+    plt.title('Distribution of Daily Returns (all funds)')
+    plt.tight_layout()
+    plt.savefig(OUT / 'daily_returns_hist.png', dpi=150)
+    plt.close()
+
+    # Sharpe and Sortino hist
+    plt.figure(figsize=(8, 4))
+    plt.hist(shar_df['sharpe'].dropna(), bins=40, alpha=0.6, label='Sharpe')
+    plt.hist(shar_df['sortino'].dropna(), bins=40, alpha=0.6, label='Sortino')
+    plt.legend()
+    plt.title('Sharpe and Sortino Distributions')
+    plt.tight_layout()
+    plt.savefig(OUT / 'sharpe_sortino_hist.png', dpi=150)
+    plt.close()
+
+    # Alpha vs Beta scatter
+    df = alpha_df.dropna(subset=['alpha', 'beta'])
+    plt.figure(figsize=(6, 6))
+    plt.scatter(df['beta'], df['alpha'], alpha=0.7)
+    plt.axhline(0, color='grey', linewidth=0.7)
+    plt.axvline(1, color='grey', linewidth=0.7)
+    plt.xlabel('Beta')
+    plt.ylabel('Alpha (annual)')
+    plt.title('Alpha vs Beta')
+    plt.tight_layout()
+    plt.savefig(OUT / 'alpha_beta_scatter.png', dpi=150)
+    plt.close()
+
+
 def main():
     nav, perf, bench = load_data()
     navr = compute_daily_returns(nav)
@@ -167,6 +203,11 @@ def main():
     alpha_beta = calc_alpha_beta(navr, bench_choice)
     mdd = max_drawdown(nav)
     score = build_scorecard(cagr, shar, alpha_beta, perf, mdd)
+    # produce summary validation plots
+    try:
+        summary_plots(navr, shar, alpha_beta)
+    except Exception:
+        pass
     benchmark_comparison(nav, score, bench)
     print('Performance analytics outputs written to', OUT)
 
