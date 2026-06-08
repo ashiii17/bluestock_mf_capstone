@@ -132,6 +132,34 @@ def page1(data):
     fig.write_image(str(OUT / 'page1_industry_overview.png'))
 
 
+def build_page1(data):
+    # Composite Page 1: KPIs, AUM trend, AUM by AMC
+    from plotly.subplots import make_subplots
+    fig = make_subplots(rows=2, cols=2, specs=[[{"type":"indicator","colspan":2}, None],[{"type":"xy"}, {"type":"bar"}]], subplot_titles=("KPIs", "", "AUM Trend", "AUM by AMC"))
+    # KPIs as indicators
+    aum = data['aum_by_house']
+    ms = data['monthly_sip']
+    fol = data['folio']
+    fm = data['fund_master']
+    total_aum = aum['aum_crore'].sum() if (not aum.empty and 'aum_crore' in aum.columns) else (aum['aum'].sum() if (not aum.empty and 'aum' in aum.columns) else 0)
+    sip_total = ms['inflow_amount'].sum() if (not ms.empty and 'inflow_amount' in ms.columns) else 0
+    folios = fol['folio_count'].iloc[-1] if (not fol.empty and 'folio_count' in fol.columns) else np.nan
+    schemes = fm['amfi_code'].nunique() if not fm.empty else 0
+    fig.add_trace(go.Indicator(mode='number', value=total_aum, title={'text':'Total AUM (crore)'}), row=1, col=1)
+    fig.add_trace(go.Indicator(mode='number', value=sip_total, title={'text':'SIP Inflows (crore)'}), row=1, col=1)
+    # AUM trend
+    if not aum.empty and 'date' in aum.columns:
+        dfm = aum.groupby(pd.Grouper(key='date', freq='ME'))['aum_crore' if 'aum_crore' in aum.columns else 'aum'].sum().reset_index()
+        fig.add_trace(go.Scatter(x=dfm['date'], y=dfm[dfm.columns[1]], name='AUM'), row=2, col=1)
+    # AUM by AMC
+    if not aum.empty and 'fund_house' in aum.columns:
+        col = 'aum_crore' if 'aum_crore' in aum.columns else ('aum' if 'aum' in aum.columns else aum.columns[1])
+        top = aum.groupby('fund_house')[col].sum().nlargest(10).reset_index()
+        fig.add_trace(go.Bar(x=top['fund_house'], y=top[col], name='AUM by AMC'), row=2, col=2)
+    fig.update_layout(height=800, title_text='Industry Overview')
+    fig.write_image(str(OUT / 'page1.png'), scale=2)
+
+
 def page2(data):
     perf = data['perf']
     nav = data['nav']
@@ -177,6 +205,41 @@ def page2(data):
         fig2.write_image(str(OUT / 'page2_nav_vs_bench.png'))
 
 
+def build_page2(data):
+    # Composite Page 2: Scatter + Scorecard table + NAV vs Benchmark
+    from plotly.subplots import make_subplots
+    perf = data['perf']
+    nav = data['nav']
+    bench = data['bench']
+    score = None
+    try:
+        score = pd.read_csv(Path('reports') / 'performance' / 'fund_scorecard.csv')
+    except Exception:
+        score = data['perf'].head(10)
+    fig = make_subplots(rows=2, cols=2, specs=[[{"type":"xy"},{"type":"table"}],[{"colspan":2, "type":"xy"}, None]], subplot_titles=("Return vs Risk","Scorecard","NAV vs Benchmark",""))
+    # Scatter
+    if not perf.empty and {'return_pct','std_dev_pct','amfi_code'}.issubset(perf.columns):
+        df = perf.copy()
+        size_col = 'aum_crore' if 'aum_crore' in perf.columns else None
+        fig.add_trace(go.Scatter(x=df['return_pct'], y=df['std_dev_pct'], mode='markers', marker=dict(size=(df[size_col].fillna(0)/1000) if size_col else 8), text=df['amfi_code']), row=1, col=1)
+    # Scorecard table (top 10 by score)
+    if score is not None:
+        s = score.sort_values('score', ascending=False).head(10)
+        fig.add_trace(go.Table(header=dict(values=list(s.columns)), cells=dict(values=[s[c].tolist() for c in s.columns])), row=1, col=2)
+    # NAV vs benchmark
+    if not nav.empty:
+        top_code = perf.sort_values('return_pct', ascending=False)['amfi_code'].iloc[0] if ('return_pct' in perf.columns and not perf.empty) else nav['amfi_code'].unique()[0]
+        s = nav[nav['amfi_code']==top_code].sort_values('date')
+        fig.add_trace(go.Scatter(x=s['date'], y=s['nav']/s['nav'].iloc[0], name=str(top_code)), row=2, col=1)
+        if not bench.empty:
+            pivot = bench.pivot(index='date', columns='index_name', values='close_value')
+            if 'NIFTY50' in pivot.columns:
+                b = pivot['NIFTY50'].resample('ME').last()
+                fig.add_trace(go.Scatter(x=b.index, y=b.values/b.values[0], name='NIFTY50'), row=2, col=1)
+    fig.update_layout(height=900, title_text='Fund Performance')
+    fig.write_image(str(OUT / 'page2.png'), scale=2)
+
+
 def page3(data):
     tx = data['transactions']
     if not tx.empty:
@@ -190,6 +253,44 @@ def page3(data):
             d = tx.groupby('transaction_type')['amount'].sum().reset_index()
             fig2 = px.pie(d, names='transaction_type', values='amount', hole=0.5, title='Transaction Type Split')
             fig2.write_image(str(OUT / 'page3_tx_type_donut.png'))
+        # age group vs avg SIP amount
+        if 'age_group' in tx.columns and 'amount' in tx.columns and 'transaction_type' in tx.columns:
+            sip = tx[tx['transaction_type'].str.upper() == 'SIP']
+            if not sip.empty:
+                ag = sip.groupby('age_group')['amount'].mean().reset_index().sort_values('amount', ascending=False)
+                fig3 = px.bar(ag, x='age_group', y='amount', title='Avg SIP Amount by Age Group')
+                fig3.write_image(str(OUT / 'page3_age_avg_sip.png'))
+        # monthly transaction volume line (count)
+        if 'date' in tx.columns:
+            mv = tx.set_index('date').resample('ME').size().rename('tx_count').reset_index()
+            fig4 = px.line(mv, x='date', y='tx_count', title='Monthly Transaction Volume')
+            fig4.write_image(str(OUT / 'page3_monthly_tx_volume.png'))
+
+
+def build_page3(data):
+    # Composite Page 3: tx by state, donut, age-group avg SIP, monthly tx volume
+    from plotly.subplots import make_subplots
+    tx = data['transactions']
+    fig = make_subplots(rows=2, cols=2, specs=[[{"type":"xy"},{"type":"domain"}], [{"type":"xy"},{"type":"xy"}]], subplot_titles=("Tx by State","Tx Type Split","Avg SIP by Age","Monthly Tx Volume"))
+    if not tx.empty:
+        if 'state' in tx.columns and 'amount' in tx.columns:
+            st = tx.groupby('state')['amount'].sum().nlargest(20).reset_index()
+            fig.add_trace(go.Bar(x=st['state'], y=st['amount']), row=1, col=1)
+        if 'transaction_type' in tx.columns and 'amount' in tx.columns:
+            d = tx.groupby('transaction_type')['amount'].sum().reset_index()
+            fig.add_trace(go.Pie(labels=d['transaction_type'], values=d['amount'], hole=0.5), row=1, col=2)
+        # avg SIP by age
+        if 'transaction_type' in tx.columns and 'age_group' in tx.columns and 'amount' in tx.columns:
+            sip = tx[tx['transaction_type']=='SIP']
+            if not sip.empty:
+                ag = sip.groupby('age_group')['amount'].mean().reset_index()
+                fig.add_trace(go.Bar(x=ag['age_group'], y=ag['amount']), row=2, col=1)
+        # monthly tx volume
+        if 'date' in tx.columns:
+            mv = tx.set_index('date').resample('ME').size().reset_index(name='tx_count')
+            fig.add_trace(go.Scatter(x=mv['date'], y=mv['tx_count']), row=2, col=2)
+    fig.update_layout(height=900, title_text='Investor Analytics')
+    fig.write_image(str(OUT / 'page3.png'), scale=2)
 
 
 def page4(data):
@@ -201,6 +302,57 @@ def page4(data):
             ms = monthly_sip.groupby(pd.Grouper(key='date', freq='ME'))['inflow_amount'].sum().reset_index()
             fig = make_dual_axis(ms, bench)
             fig.write_image(str(OUT / 'page4_sip_market_trends.png'))
+    # category inflow heatmap and top5 categories FY25
+    cat = data.get('category_inflows', pd.DataFrame())
+    if not cat.empty and 'month' in cat.columns:
+        c = cat.copy()
+        if 'month' in c.columns:
+            c = c.rename(columns={'month': 'date'})
+            c['date'] = pd.to_datetime(c['date'])
+        # heatmap pivot month x category
+        pivot = c.pivot_table(index=pd.Grouper(key='date', freq='ME'), columns='category', values='net_inflow_crore', aggfunc='sum').fillna(0)
+        # plot heatmap using plotly
+        hm = go.Figure(data=go.Heatmap(z=pivot.T.values, x=pivot.index.astype(str), y=pivot.columns, colorscale='Viridis'))
+        hm.update_layout(title='Category Inflow Heatmap')
+        hm.write_image(str(OUT / 'page4_category_inflow_heatmap.png'))
+        # top 5 categories by net inflow FY25 (filter year==2025)
+        fy25 = c[c['date'].dt.year == 2025]
+        if not fy25.empty:
+            top5 = fy25.groupby('category')['net_inflow_crore'].sum().nlargest(5).reset_index()
+            figtop = px.bar(top5, x='category', y='net_inflow_crore', title='Top 5 Categories by Net Inflow FY25')
+            figtop.write_image(str(OUT / 'page4_top5_categories_fy25.png'))
+
+
+def build_page4(data):
+    # Composite Page 4: Dual-axis SIP + Nifty, category inflow heatmap, top5 categories FY25
+    from plotly.subplots import make_subplots
+    ms = data['monthly_sip']
+    cat = data['category_inflows']
+    bench = data['bench']
+    fig = make_subplots(rows=2, cols=2, specs=[[{"colspan":2, "type":"xy"}, None],[{"type":"heatmap"}, {"type":"bar"}]], subplot_titles=("SIP Inflow vs Nifty50","", "Category Inflow Heatmap","Top 5 Categories FY25"))
+    # SIP dual axis
+    if not ms.empty:
+        fig.add_trace(go.Bar(x=ms['date'], y=ms['inflow_amount'], name='SIP Inflow', marker_color='steelblue'), row=1, col=1)
+    if not bench.empty:
+        pivot = bench.pivot(index='date', columns='index_name', values='close_value')
+        if 'NIFTY50' in pivot.columns:
+            b = pivot['NIFTY50'].resample('ME').last()
+            fig.add_trace(go.Scatter(x=b.index, y=b.values, name='NIFTY50', yaxis='y2', line=dict(color='orange')), row=1, col=1)
+    # heatmap
+    if not cat.empty:
+        c = cat.copy()
+        if 'month' in c.columns:
+            c['date'] = pd.to_datetime(c['month'])
+        pivot = c.pivot(index='category', columns='date', values='net_inflow_crore').fillna(0)
+        fig.add_trace(go.Heatmap(z=pivot.values, x=[d.strftime('%Y-%m') for d in pivot.columns], y=pivot.index, colorscale='Viridis'), row=2, col=1)
+        # top5 FY25 (assume FY25 = 2024-04-01 to 2025-03-31)
+        fy25_start = pd.to_datetime('2024-04-01')
+        fy25_end = pd.to_datetime('2025-03-31')
+        mask = (c['date'] >= fy25_start) & (c['date'] <= fy25_end)
+        top5 = c[mask].groupby('category')['net_inflow_crore'].sum().nlargest(5).reset_index()
+        fig.add_trace(go.Bar(x=top5['category'], y=top5['net_inflow_crore'], marker_color='teal'), row=2, col=2)
+    fig.update_layout(height=1000, title_text='SIP & Market Trends')
+    fig.write_image(str(OUT / 'page4.png'), scale=2)
 
 
 def make_dual_axis(ms, bench):
@@ -230,12 +382,18 @@ def combine_pngs_to_pdf(png_paths, out_pdf):
 
 def main():
     data = load_all()
+    # build composite pages
+    build_page1(data)
+    build_page2(data)
+    build_page3(data)
+    build_page4(data)
+    # also keep individual component images for reference
     page1(data)
     page2(data)
     page3(data)
     page4(data)
-    # combine to pdf
-    pngs = sorted(OUT.glob('page*.png'))
+    # combine to pdf using final page1..page4
+    pngs = [OUT / f'page{i}.png' for i in range(1,5) if (OUT / f'page{i}.png').exists()]
     combine_pngs_to_pdf(pngs, OUT / 'Dashboard.pdf')
     print('Dashboard pages written to', OUT)
 
