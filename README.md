@@ -64,11 +64,12 @@ dashboard/bluestock_mf_dashboard.twb
 
 Open it with Tableau Desktop or Tableau Public Desktop and point it to the CSVs in `data/processed/`. The dashboard workbook is designed around interactive Tableau filters/slicers for time period, fund house, category, scheme, and investor attributes.
 
-Tableau Public URL:
+Tableau Public dashboard URLs:
 
-```text
-Not published from this environment. Publish dashboard/bluestock_mf_dashboard.twb from Tableau Public Desktop and paste the public URL here.
-```
+- Dashboard 1: https://public.tableau.com/app/profile/ashi.dwivedi/viz/bluestock_mf_dashboard_17812008151090/Dashboard1?publish=yes
+- Dashboard 2: https://public.tableau.com/app/profile/ashi.dwivedi/viz/bluestock_mf_dashboard_17812008151090/Dashboard2?publish=yes
+- Dashboard 3: https://public.tableau.com/app/profile/ashi.dwivedi/viz/bluestock_mf_dashboard_17812008151090/Dashboard3?publish=yes
+- Dashboard 4: https://public.tableau.com/app/profile/ashi.dwivedi/viz/bluestock_mf_dashboard_17812008151090/Dashboard4?publish=yes
 
 ## Datasets
 
@@ -102,7 +103,7 @@ Raw and processed numbered datasets:
 - 8 project objectives: met through ingestion, cleaning, SQL warehouse, EDA, performance analytics, dashboard, advanced analytics, and final reporting.
 - 7 deliverables: submitted as raw/processed data, SQL schema/queries, notebooks/scripts, dashboard workbook, final report, presentation, and clean GitHub repo with README/tag.
 - Code runs without errors: `python run_pipeline.py` completed successfully locally.
-- Dashboard loads: Tableau workbook exists at `dashboard/bluestock_mf_dashboard.twb`; public publishing still requires Tableau Public Desktop sign-in.
+- Dashboard loads: Tableau workbook exists at `dashboard/bluestock_mf_dashboard.twb` and the four Tableau Public dashboard URLs are listed above.
 - Report quality: `reports/Final_Report.pdf` is present for submission.
 - Presentation quality: `reports/Bluestock_MF_Presentation.pptx` is present for submission.
 - No hard-coded local paths in scripts: paths are derived from `pathlib.Path(__file__).resolve()`.
