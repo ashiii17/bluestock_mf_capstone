@@ -1,4 +1,13 @@
+"""Generate dashboard images for export.
+
+This script reads cleaned processed CSVs and creates a set of
+PNG images used by the dashboard or for inclusion in reports.
+It is safe to import (no side-effects) and provides a ``main()``
+entrypoint for CLI execution.
+"""
+
 from pathlib import Path
+import logging
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -13,6 +22,7 @@ OUT.mkdir(parents=True, exist_ok=True)
 
 
 def load_all():
+    """Load processed CSVs and normalize common fields for dashboard charts."""
     files = {
         'fund_master': '01_fund_master_processed.csv',
         'nav': '02_nav_history_processed.csv',
@@ -69,6 +79,7 @@ def load_all():
 
 
 def page1(data):
+    """Build legacy page 1 image for industry overview visuals."""
     # KPIs
     fm = data['fund_master']
     folio = data['folio']
@@ -133,6 +144,7 @@ def page1(data):
 
 
 def build_page1(data):
+    """Build composite page 1 with KPIs, AUM trend, and AMC AUM."""
     # Composite Page 1: KPIs, AUM trend, AUM by AMC
     from plotly.subplots import make_subplots
     fig = make_subplots(rows=2, cols=2, specs=[[{"type":"indicator","colspan":2}, None],[{"type":"xy"}, {"type":"bar"}]], subplot_titles=("KPIs", "", "AUM Trend", "AUM by AMC"))
@@ -161,6 +173,7 @@ def build_page1(data):
 
 
 def page2(data):
+    """Build legacy page 2 images for performance comparisons."""
     perf = data['perf']
     nav = data['nav']
     aum_house = data['aum_by_house']
@@ -206,6 +219,7 @@ def page2(data):
 
 
 def build_page2(data):
+    """Build composite page 2 with risk-return, scorecard, and benchmark views."""
     # Composite Page 2: Scatter + Scorecard table + NAV vs Benchmark
     from plotly.subplots import make_subplots
     perf = data['perf']
@@ -241,6 +255,7 @@ def build_page2(data):
 
 
 def page3(data):
+    """Build legacy page 3 images for investor transaction analytics."""
     tx = data['transactions']
     if not tx.empty:
         # transactions by state
@@ -268,6 +283,7 @@ def page3(data):
 
 
 def build_page3(data):
+    """Build composite page 3 with state, type, age, and volume views."""
     # Composite Page 3: tx by state, donut, age-group avg SIP, monthly tx volume
     from plotly.subplots import make_subplots
     tx = data['transactions']
@@ -294,6 +310,7 @@ def build_page3(data):
 
 
 def page4(data):
+    """Build legacy page 4 images for SIP and category inflow trends."""
     monthly_sip = data['monthly_sip']
     bench = data['bench']
     if not monthly_sip.empty:
@@ -324,6 +341,7 @@ def page4(data):
 
 
 def build_page4(data):
+    """Build composite page 4 with SIP, benchmark, and category inflow views."""
     # Composite Page 4: Dual-axis SIP + Nifty, category inflow heatmap, top5 categories FY25
     from plotly.subplots import make_subplots
     ms = data['monthly_sip']
@@ -356,6 +374,7 @@ def build_page4(data):
 
 
 def make_dual_axis(ms, bench):
+    """Create a dual-axis SIP inflow and NIFTY50 trend figure."""
     fig = go.Figure()
     fig.add_trace(go.Bar(x=ms['date'], y=ms['inflow_amount'], name='SIP Inflow', yaxis='y'))
     if not bench.empty and 'index_name' in bench.columns:
@@ -369,34 +388,38 @@ def make_dual_axis(ms, bench):
 
 
 def make_page_figure():
+    """Create the base subplot layout used by legacy page 1."""
     from plotly.subplots import make_subplots
     fig = make_subplots(rows=2, cols=2, subplot_titles=("", "", "AUM Trend", "AUM by AMC"))
     return fig
 
 
 def combine_pngs_to_pdf(png_paths, out_pdf):
+    """Combine generated dashboard PNG pages into a single PDF."""
     imgs = [Image.open(p).convert('RGB') for p in png_paths]
     if imgs:
         imgs[0].save(out_pdf, save_all=True, append_images=imgs[1:], quality=95)
 
 
-def main():
+def main() -> None:
+    """Generate all dashboard images and compose a PDF summary."""
+    logging.info("Generating dashboard images in %s", OUT)
     data = load_all()
-    # build composite pages
     build_page1(data)
     build_page2(data)
     build_page3(data)
     build_page4(data)
-    # also keep individual component images for reference
+    # also build individual pages for legacy compatibility
     page1(data)
     page2(data)
     page3(data)
     page4(data)
-    # combine to pdf using final page1..page4
-    pngs = [OUT / f'page{i}.png' for i in range(1,5) if (OUT / f'page{i}.png').exists()]
-    combine_pngs_to_pdf(pngs, OUT / 'Dashboard.pdf')
-    print('Dashboard pages written to', OUT)
+    pngs = [OUT / f'page{i}.png' for i in range(1, 5) if (OUT / f'page{i}.png').exists()]
+    if pngs:
+        combine_pngs_to_pdf(pngs, OUT / 'Dashboard.pdf')
+    logging.info("Dashboard pages written to %s", OUT)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     main()

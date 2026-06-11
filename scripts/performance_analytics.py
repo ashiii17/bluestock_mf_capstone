@@ -1,4 +1,11 @@
+"""Performance analytics utilities.
+
+Contains functions to compute CAGR, Sharpe/Sortino, alpha/beta,
+max drawdown and to build scorecards used by reporting.
+"""
+
 from pathlib import Path
+import logging
 import pandas as pd
 import numpy as np
 from datetime import timedelta
@@ -13,6 +20,7 @@ OUT.mkdir(parents=True, exist_ok=True)
 
 
 def load_data():
+    """Load processed NAV, performance, and benchmark datasets."""
     nav = pd.read_csv(PROC / '02_nav_history_processed.csv', parse_dates=['date'])
     perf = pd.read_csv(PROC / '07_scheme_performance_processed.csv')
     bench = pd.read_csv(PROC / '10_benchmark_indices_processed.csv', parse_dates=['date'])
@@ -20,6 +28,7 @@ def load_data():
 
 
 def compute_daily_returns(nav):
+    """Compute per-scheme daily returns and persist the enriched NAV table."""
     nav = nav.sort_values(['amfi_code', 'date']).copy()
     nav['daily_return'] = nav.groupby('amfi_code')['nav'].pct_change()
     nav.to_csv(OUT / 'daily_returns.csv', index=False)
@@ -27,6 +36,7 @@ def compute_daily_returns(nav):
 
 
 def calc_cagr(nav, years_list=(1, 3, 5)):
+    """Calculate CAGR using observed trading-day counts annualized by 252 days."""
     last_date = nav['date'].max()
     results = []
     for code, g in nav.groupby('amfi_code'):
@@ -35,13 +45,16 @@ def calc_cagr(nav, years_list=(1, 3, 5)):
         row = {'amfi_code': code}
         for y in years_list:
             start_date = last_date - relativedelta(years=y)
-            # find nearest date on or before start_date
             s_before = s[s.index <= start_date]
             if len(s_before) == 0:
                 row[f'cagr_{y}yr'] = np.nan
             else:
                 start_nav = s_before['nav'].iloc[-1]
-                row[f'cagr_{y}yr'] = (end_nav / start_nav) ** (1 / y) - 1
+                n_trading_days = len(pd.bdate_range(s_before.index[-1], s.index[-1])) - 1
+                if n_trading_days <= 0 or start_nav <= 0:
+                    row[f'cagr_{y}yr'] = np.nan
+                else:
+                    row[f'cagr_{y}yr'] = (end_nav / start_nav) ** (252 / n_trading_days) - 1
         results.append(row)
     df = pd.DataFrame(results)
     df.to_csv(OUT / 'cagr_table.csv', index=False)
@@ -49,10 +62,12 @@ def calc_cagr(nav, years_list=(1, 3, 5)):
 
 
 def annualize(x):
+    """Return annualized mean and volatility for a daily return series."""
     return x.mean() * 252, x.std(ddof=0) * np.sqrt(252)
 
 
 def calc_sharpe_sortino(nav_returns, rf=0.065):
+    """Calculate Sharpe and Sortino ratios from daily fund returns."""
     rows = []
     for code, g in nav_returns.groupby('amfi_code'):
         r = g['daily_return'].dropna()
@@ -75,7 +90,7 @@ def calc_sharpe_sortino(nav_returns, rf=0.065):
 
 
 def calc_alpha_beta(nav_returns, bench_returns):
-    # bench_returns: DataFrame with date and benchmark columns
+    """Estimate annual alpha, beta, and tracking error against a benchmark."""
     bench_returns = bench_returns.set_index('date').sort_index()
     bench_returns['bench_ret'] = bench_returns['close_value'].pct_change()
     bench_ret = bench_returns['bench_ret']
@@ -97,6 +112,7 @@ def calc_alpha_beta(nav_returns, bench_returns):
 
 
 def max_drawdown(nav):
+    """Compute maximum drawdown and drawdown window for each scheme."""
     rows = []
     for code, g in nav.groupby('amfi_code'):
         s = g.sort_values('date').set_index('date')['nav']
@@ -115,7 +131,7 @@ def max_drawdown(nav):
 
 
 def build_scorecard(cagr_df, sharpe_df, alpha_df, perf_df, mdd_df):
-    # merge
+    """Merge core metrics into a ranked fund scorecard."""
     df = cagr_df.merge(sharpe_df, on='amfi_code', how='left')
     df = df.merge(alpha_df[['amfi_code', 'alpha', 'beta']], on='amfi_code', how='left')
     df = df.merge(perf_df[['amfi_code', 'expense_ratio_pct']], on='amfi_code', how='left')
@@ -135,6 +151,7 @@ def build_scorecard(cagr_df, sharpe_df, alpha_df, perf_df, mdd_df):
 
 
 def benchmark_comparison(nav, scorecard, bench, years=3):
+    """Plot normalized top-fund NAV performance against benchmark indices."""
     last = nav['date'].max()
     start = last - relativedelta(years=years)
     top5 = scorecard.sort_values('score', ascending=False).head(5)['amfi_code'].tolist()
@@ -160,7 +177,7 @@ def benchmark_comparison(nav, scorecard, bench, years=3):
 
 
 def summary_plots(nav_returns, shar_df, alpha_df):
-    # Daily returns histogram (all funds)
+    """Build distribution and alpha/beta diagnostic plots."""
     allr = nav_returns['daily_return'].dropna()
     plt.figure(figsize=(8, 4))
     plt.hist(allr, bins=200, density=True, color='C0')
@@ -194,6 +211,8 @@ def summary_plots(nav_returns, shar_df, alpha_df):
 
 
 def main():
+    """Run all performance analytics and write CSV/PNG outputs."""
+    logging.info('Running performance analytics')
     nav, perf, bench = load_data()
     navr = compute_daily_returns(nav)
     cagr = calc_cagr(nav)
@@ -203,14 +222,14 @@ def main():
     alpha_beta = calc_alpha_beta(navr, bench_choice)
     mdd = max_drawdown(nav)
     score = build_scorecard(cagr, shar, alpha_beta, perf, mdd)
-    # produce summary validation plots
     try:
         summary_plots(navr, shar, alpha_beta)
     except Exception:
-        pass
+        logging.exception('Failed to build some summary plots')
     benchmark_comparison(nav, score, bench)
-    print('Performance analytics outputs written to', OUT)
+    logging.info('Performance analytics outputs written to %s', OUT)
 
 
 if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
     main()

@@ -1,6 +1,14 @@
+"""ETL pipeline for the Bluestock MF capstone.
+
+This module contains cleaning functions and utilities to build the
+processed CSVs and the small SQLite data warehouse. The module is
+designed to be imported and called from `run_pipeline.py`.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path
+import logging
 import sqlite3
 import argparse
 from sqlalchemy import create_engine, text
@@ -242,15 +250,18 @@ ORDER BY d.year, d.quarter, total_aum_crore DESC;
 
 
 def write_processed_csv(name: str, df: pd.DataFrame) -> None:
+    """Write a cleaned dataframe to the numbered processed CSV folder."""
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
     df.to_csv(PROCESSED_DIR / name.replace('.csv', '_processed.csv'), index=False)
 
 
 def parse_date_column(df: pd.DataFrame, column: str) -> pd.Series:
+    """Parse a dataframe column to Python dates with invalid values coerced."""
     return pd.to_datetime(df[column], errors='coerce').dt.date
 
 
 def clean_nav_history(df: pd.DataFrame) -> pd.DataFrame:
+    """Clean NAV data and forward-fill weekends/holidays per AMFI scheme."""
     df = df.copy()
     df['date'] = parse_date_column(df, 'date')
     df['nav'] = pd.to_numeric(df['nav'], errors='coerce')
@@ -273,6 +284,7 @@ def clean_nav_history(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def clean_investor_transactions(df: pd.DataFrame) -> pd.DataFrame:
+    """Standardize investor transaction dates, types, KYC labels, and amounts."""
     df = df.copy()
     df['transaction_date'] = parse_date_column(df, 'transaction_date')
     df['transaction_type'] = (
@@ -294,6 +306,7 @@ def clean_investor_transactions(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def clean_scheme_performance(df: pd.DataFrame) -> pd.DataFrame:
+    """Convert scheme performance metrics to numeric fields and flag anomalies."""
     df = df.copy()
     numeric_columns = [
         'return_1yr_pct',
@@ -315,13 +328,15 @@ def clean_scheme_performance(df: pd.DataFrame) -> pd.DataFrame:
             df[column] = pd.to_numeric(df[column], errors='coerce')
 
     if 'expense_ratio_pct' in df.columns:
-        out_of_range = df[~df['expense_ratio_pct'].between(0.1, 2.5, inclusive='both')]
+        # use pandas Series.between without deprecated inclusive kw on newer pandas
+        out_of_range = df[~df['expense_ratio_pct'].between(0.1, 2.5)]
         if not out_of_range.empty:
-            print(f"Warning: {len(out_of_range)} scheme_performance rows have expense_ratio_pct outside 0.1-2.5% range")
+            logging.warning("%d scheme_performance rows have expense_ratio_pct outside 0.1-2.5%% range", len(out_of_range))
     return df
 
 
 def build_dim_date(min_date: pd.Timestamp, max_date: pd.Timestamp) -> pd.DataFrame:
+    """Build a complete daily date dimension between two dates."""
     dates = pd.date_range(min_date, max_date, freq='D')
     df = pd.DataFrame({'date': dates})
     df['date_id'] = df['date'].dt.strftime('%Y%m%d').astype(int)
@@ -336,10 +351,12 @@ def build_dim_date(min_date: pd.Timestamp, max_date: pd.Timestamp) -> pd.DataFra
 
 
 def load_sqlite(df: pd.DataFrame, table_name: str, engine) -> None:
+    """Append a dataframe into a SQLite table using the provided engine."""
     df.to_sql(table_name, engine, if_exists='append', index=False)
 
 
 def assign_date_id(df: pd.DataFrame, date_column: str, dim_date: pd.DataFrame) -> pd.DataFrame:
+    """Replace a date column with the integer surrogate key from ``dim_date``."""
     df = df.copy()
     date_map = dict(zip(dim_date['date'].dt.date, dim_date['date_id']))
     df['date_id'] = df[date_column].map(date_map)
@@ -347,14 +364,17 @@ def assign_date_id(df: pd.DataFrame, date_column: str, dim_date: pd.DataFrame) -
 
 
 def write_schema_file() -> None:
+    """Write the generated SQLite DDL to ``sql/schema.sql``."""
     SCHEMA_FILE.write_text(SCHEMA_SQL, encoding='utf-8')
 
 
 def write_queries_file() -> None:
+    """Write reusable analytical SQL queries to ``sql/queries.sql``."""
     QUERIES_FILE.write_text(QUERIES_SQL, encoding='utf-8')
 
 
 def build_data_dictionary(datasets: dict[str, pd.DataFrame]) -> None:
+    """Create a markdown data dictionary for all processed datasets."""
     lines = [
         '# Bluestock Data Dictionary',
         '',
@@ -381,6 +401,7 @@ def build_data_dictionary(datasets: dict[str, pd.DataFrame]) -> None:
 
 
 def cleanup_processed_files() -> None:
+    """Remove stale non-numbered processed CSVs from previous runs."""
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
     for path in PROCESSED_DIR.glob('*_processed.csv'):
         if not (path.name[:2].isdigit() and path.name.endswith('_processed.csv')):
@@ -389,20 +410,21 @@ def cleanup_processed_files() -> None:
 
 
 def read_csv(path: Path) -> pd.DataFrame:
+    """Read a raw CSV from disk using pandas defaults."""
     return pd.read_csv(path)
 
 
 def print_profile(name: str, df: pd.DataFrame) -> None:
-    print(f"\n{'=' * 80}")
-    print(name)
-    print(f"shape: {df.shape}")
-    print("\ndtypes:")
-    print(df.dtypes)
-    print("\nhead:")
-    print(df.head())
+    """Log shape, dtypes, and a preview for a raw dataset."""
+    logging.info('\n%s', '=' * 80)
+    logging.info('%s', name)
+    logging.info('shape: %s', df.shape)
+    logging.info('\ndtypes:\n%s', df.dtypes)
+    logging.info('\nhead:\n%s', df.head())
 
 
 def missing_summary(name: str, df: pd.DataFrame) -> list[str]:
+    """Return markdown bullets describing missing values for a dataset."""
     lines: list[str] = []
     missing = df.isna().sum()
     missing = missing[missing > 0].sort_values(ascending=False)
@@ -416,11 +438,13 @@ def missing_summary(name: str, df: pd.DataFrame) -> list[str]:
 
 
 def duplicate_summary(name: str, df: pd.DataFrame) -> str:
+    """Return a markdown bullet with duplicate-row counts."""
     duplicates = int(df.duplicated().sum())
     return f"- `{name}`: {duplicates} fully duplicated rows."
 
 
 def date_anomalies(name: str, df: pd.DataFrame) -> list[str]:
+    """Return markdown bullets for invalid, minimum, and maximum dates."""
     lines: list[str] = []
     for column in DATE_COLUMNS.get(name, []):
         if column not in df.columns:
@@ -439,6 +463,7 @@ def date_anomalies(name: str, df: pd.DataFrame) -> list[str]:
 
 
 def numeric_anomalies(name: str, df: pd.DataFrame) -> list[str]:
+    """Return markdown bullets for unexpected negative numeric values."""
     numeric = df.select_dtypes(include="number")
     if numeric.empty:
         return [f"- `{name}`: no numeric columns to check."]
@@ -456,6 +481,7 @@ def numeric_anomalies(name: str, df: pd.DataFrame) -> list[str]:
 
 
 def key_checks(datasets: dict[str, pd.DataFrame]) -> list[str]:
+    """Validate key relationships between fund master and NAV history."""
     lines: list[str] = ["## Key Validation"]
     master = datasets.get("01_fund_master.csv")
     nav = datasets.get("02_nav_history.csv")
@@ -483,6 +509,7 @@ def key_checks(datasets: dict[str, pd.DataFrame]) -> list[str]:
 
 
 def fund_master_exploration(master: pd.DataFrame) -> list[str]:
+    """Summarize categorical values and AMFI code formats in fund master data."""
     lines = ["## Fund Master Exploration"]
     for column in ["fund_house", "category", "sub_category", "risk_category"]:
         if column not in master.columns:
@@ -500,6 +527,7 @@ def fund_master_exploration(master: pd.DataFrame) -> list[str]:
 
 
 def write_report(datasets: dict[str, pd.DataFrame]) -> None:
+    """Write the Day 1 data quality report in markdown format."""
     lines: list[str] = [
         "# Day 1 Data Quality Summary",
         "",
@@ -537,6 +565,7 @@ def write_report(datasets: dict[str, pd.DataFrame]) -> None:
 
 
 def write_processed_outputs(datasets: dict[str, pd.DataFrame]) -> None:
+    """Write lightly parsed Day 1 processed CSV outputs."""
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
     for name, df in datasets.items():
         cleaned = df.copy()
@@ -547,10 +576,12 @@ def write_processed_outputs(datasets: dict[str, pd.DataFrame]) -> None:
 
 
 def table_name(csv_name: str) -> str:
+    """Convert a numbered source CSV filename to a SQLite table name."""
     return csv_name.removesuffix(".csv")[3:]
 
 
 def write_sqlite_database(datasets: dict[str, pd.DataFrame]) -> None:
+    """Write raw-shaped tables into the SQLite database for Day 1."""
     DB_DIR.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(DB_PATH) as connection:
         for name, df in datasets.items():
@@ -558,6 +589,7 @@ def write_sqlite_database(datasets: dict[str, pd.DataFrame]) -> None:
 
 
 def run_day1() -> None:
+    """Run raw data profiling and basic processed-output generation."""
     csv_paths = sorted(path for path in RAW_DIR.glob("*.csv") if path.name[:2].isdigit())
     if not csv_paths:
         raise FileNotFoundError(f"No provided CSV files found in {RAW_DIR}")
@@ -571,12 +603,13 @@ def run_day1() -> None:
     write_report(datasets)
     write_processed_outputs(datasets)
     write_sqlite_database(datasets)
-    print(f"\nWrote report: {REPORTS_DIR / 'day1_data_quality_summary.md'}")
-    print(f"Wrote processed CSVs to: {PROCESSED_DIR}")
-    print(f"Wrote SQLite database: {DB_PATH}")
+    logging.info("Wrote report: %s", REPORTS_DIR / 'day1_data_quality_summary.md')
+    logging.info("Wrote processed CSVs to: %s", PROCESSED_DIR)
+    logging.info("Wrote SQLite database: %s", DB_PATH)
 
 
 def run_day2() -> None:
+    """Run cleaned CSV generation, star schema DDL, and SQLite warehouse load."""
     csv_paths = sorted([path for path in RAW_DIR.glob('*.csv') if path.name[:2].isdigit()])
     if not csv_paths:
         raise FileNotFoundError(f'No numbered CSV files found in {RAW_DIR}')
@@ -597,7 +630,7 @@ def run_day2() -> None:
                     df[column] = parse_date_column(df, column)
         datasets[name] = df
         write_processed_csv(name, df)
-        print(f'Processed {name}: {df.shape[0]} rows, {df.shape[1]} columns')
+        logging.info('Processed %s: %d rows, %d columns', name, df.shape[0], df.shape[1])
 
     cleanup_processed_files()
 
@@ -671,24 +704,26 @@ def run_day2() -> None:
     fact_performance = datasets['07_scheme_performance.csv'][performance_columns]
     load_sqlite(fact_performance, 'fact_performance', engine)
 
-    print(f'Wrote schema to {DB_DIR / "../sql" / "schema.sql"}')
-    print(f'Wrote queries to {DB_DIR / "../sql" / "queries.sql"}')
-    print(f'Wrote data dictionary to {DB_DIR / "../data_dictionary.md"}')
-    print(f'Wrote SQLite database to {DB_PATH}')
+    logging.info('Wrote schema to %s', SCHEMA_FILE)
+    logging.info('Wrote queries to %s', QUERIES_FILE)
+    logging.info('Wrote data dictionary to %s', DICTIONARY_FILE)
+    logging.info('Wrote SQLite database to %s', DB_PATH)
 
 
 def main() -> None:
+    """Parse CLI arguments and run the selected ETL mode."""
     parser = argparse.ArgumentParser(description="ETL runner: day1 data checks and day2 warehouse build")
     parser.add_argument("--mode", choices=("day1", "day2", "all"), default="all", help="Which part to run")
     args = parser.parse_args()
 
     if args.mode in ("day1", "all"):
-        print("Running Day 1 data checks and outputs...")
+        logging.info("Running Day 1 data checks and outputs")
         run_day1()
     if args.mode in ("day2", "all"):
-        print("Running Day 2 cleaning, schema and DB load...")
+        logging.info("Running Day 2 cleaning, schema and DB load")
         run_day2()
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
     main()

@@ -1,20 +1,33 @@
-"""Compute metrics for reporting (placeholder).
+"""Compute metrics for reporting.
 
-Fill this file with functions to compute AUM growth, CAGR, volatility, Sharpe, Sortino,
-and other performance metrics using the cleaned datasets in data/processed/.
+This module contains helper functions used by the pipeline to load
+and compute performance metrics. It intentionally keeps a small API
+so it can be reused from `run_pipeline.py` without side-effects.
 """
 
 from pathlib import Path
+import logging
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 PROCESSED_DIR = ROOT / "data" / "processed"
 
 
-def load_nav():
+def load_nav() -> pd.DataFrame:
+    """Load cleaned NAV history for downstream metrics.
+
+    Returns:
+        pd.DataFrame: NAV history with at least columns ``amfi_code``, ``date``, ``nav``.
+    """
     return pd.read_csv(PROCESSED_DIR / "02_nav_history_processed.csv")
 
 
-if __name__ == "__main__":
+def _cli_check() -> None:
+    """Small CLI helper to validate imports when executed directly."""
     df = load_nav()
-    print("Loaded nav rows:", len(df))
+    logging.info("Loaded nav rows: %d", len(df))
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    _cli_check()

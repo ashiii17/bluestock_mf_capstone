@@ -7,6 +7,7 @@ Day 6 deliverables.
 
 from pathlib import Path
 import argparse
+import logging
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,10 +21,12 @@ RISK_MAPPING = {
 
 
 def load_scheme_performance():
+    """Load the processed scheme performance dataset."""
     return pd.read_csv(PROCESSED_DIR / "07_scheme_performance_processed.csv")
 
 
 def recommend_funds(risk_appetite: str, top_n: int = 3) -> pd.DataFrame:
+    """Return top Sharpe-ranked funds matching a risk appetite."""
     appetite_key = risk_appetite.strip().lower()
     if appetite_key not in RISK_MAPPING:
         raise ValueError(f"Risk appetite must be one of {list(RISK_MAPPING)}")
@@ -38,6 +41,7 @@ def recommend_funds(risk_appetite: str, top_n: int = 3) -> pd.DataFrame:
 
 
 def main():
+    """Run the CLI recommender and log a plain-text recommendation table."""
     parser = argparse.ArgumentParser(description="Recommend top funds by risk appetite.")
     parser.add_argument(
         "--risk",
@@ -50,12 +54,17 @@ def main():
 
     recommendations = recommend_funds(args.risk, top_n=args.top)
     if recommendations.empty:
-        print(f"No funds found for risk appetite '{args.risk}'.")
+        logging.info("No funds found for risk appetite '%s'.", args.risk)
         return
 
-    print(f"Top {len(recommendations)} recommendations for risk appetite '{args.risk}':\n")
-    print(recommendations.to_string(index=False))
+    logging.info(
+        "Top %d recommendations for risk appetite '%s':\n%s",
+        len(recommendations),
+        args.risk,
+        recommendations.to_string(index=False),
+    )
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
     main()
